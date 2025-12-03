@@ -6,7 +6,7 @@ from config import GITHUB_TOKEN
 
 # Cấu hình logging
 logging.basicConfig(
-    filename='crawler.log',
+    filename='crawler_5000_repo_with_github_token.log',
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
@@ -18,49 +18,69 @@ HEADERS = {
 if GITHUB_TOKEN:
     HEADERS["Authorization"] = f"token {GITHUB_TOKEN}"
 
-def fetch_top_repositories(limit=100):
+def fetch_top_repositories(limit=5000):
     """
     Tìm kiếm các repository nhiều sao nhất trên GitHub.
-    Lưu ý: GitHub Search API giới hạn 1000 kết quả cho mỗi query.
-    Để lấy 5000, cần logic phức tạp hơn (chia nhỏ theo ngày hoặc số sao),
-    nhưng ở đây ta làm phiên bản đơn giản nhất.
+    GitHub Search API giới hạn 1000 kết quả cho mỗi query.
+    Để lấy 5000, chia query theo ranges of stars.
     """
     repos = []
-    page = 1
-    per_page = 100 # Max allowed by GitHub
+    seen_ids = set()  # Để tránh duplicate
+    
+    # Chia thành 5 ranges để lấy ~1000 repos mỗi lần
+    star_ranges = [
+        "stars:>=50000",
+        "stars:10000..49999",
+        "stars:5000..9999",
+        "stars:2000..4999",
+        "stars:1000..1999"
+    ]
     
     print(f"Starting to crawl top {limit} repositories...")
     
-    while len(repos) < limit:
-        url = f"https://api.github.com/search/repositories?q=stars:>1000&sort=stars&order=desc&per_page={per_page}&page={page}"
-        try:
-            response = requests.get(url, headers=HEADERS, timeout=10)
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Network error fetching repos page {page}: {e}")
-            print(f"Network error: {e}")
+    for star_range in star_ranges:
+        if len(repos) >= limit:
             break
+            
+        page = 1
+        per_page = 100
         
-        if response.status_code == 200:
-            data = response.json()
-            items = data.get("items", [])
-            if not items:
+        while len(repos) < limit:
+            url = f"https://api.github.com/search/repositories?q={star_range}&sort=stars&order=desc&per_page={per_page}&page={page}"
+            try:
+                response = requests.get(url, headers=HEADERS, timeout=10)
+            except requests.exceptions.RequestException as e:
+                logging.error(f"Network error fetching repos: {e}")
+                print(f"Network error: {e}")
                 break
             
-            repos.extend(items)
-            print(f"Fetched page {page}, total repos: {len(repos)}")
-            page += 1
-            
-            # Đơn giản: không sleep để dễ bị rate limit (theo yêu cầu bài tập)
-            # time.sleep(1) 
-        elif response.status_code == 403:
-            logging.error(f"Rate limit or block on repos page {page}: {response.json()}")
-            print("Rate limit exceeded or blocked!")
-            print(response.json())
-            break
-        else:
-            logging.error(f"Error fetching repos page {page}: {response.status_code} - {response.text}")
-            print(f"Error fetching repos: {response.status_code}")
-            break
+            if response.status_code == 200:
+                data = response.json()
+                items = data.get("items", [])
+                if not items:
+                    break
+                
+                # Thêm repos chưa thấy
+                for item in items:
+                    if item['id'] not in seen_ids:
+                        repos.append(item)
+                        seen_ids.add(item['id'])
+                
+                print(f"Fetched page {page} ({star_range}), total repos: {len(repos)}")
+                page += 1
+                
+            elif response.status_code == 422:
+                logging.error(f"Invalid query or pagination exceeded: {response.text}")
+                print(f"Pagination limit reached for {star_range}")
+                break
+            elif response.status_code == 403:
+                logging.error(f"Rate limit: {response.json()}")
+                print("Rate limit exceeded!")
+                break
+            else:
+                logging.error(f"Error fetching repos: {response.status_code} - {response.text}")
+                print(f"Error fetching repos: {response.status_code}")
+                break
             
     return repos[:limit]
 
