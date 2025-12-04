@@ -3866,3 +3866,5 @@
 
 2025-12-03 11:50:28,637 - ERROR - Error fetching commits for GitbookIO/gitbook: 403 - {"message":"API rate limit exceeded for 42.1.70.186. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)","documentation_url":"https://docs.github.com/rest/overview/resources-in-the-rest-api#rate-limiting"}
 
+=> thời gian chạy hết 900 là 00:31:22,148
+=> hết 5000 là 02:54:16,377. với trường hợp crawl dc 5000 repo và có 1 số releases hay commits k crawl dc.

@@ -1,20 +1,18 @@
 import psycopg2
-from config import DB_HOST, DB_NAME, DB_USER, DB_PASS, DB_PORT
+from config import DB_HOST, DB_NAME, DB_USER, DB_PASSWORD, DB_PORT
+
 
 def get_connection():
     conn = psycopg2.connect(
-        host=DB_HOST,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS,
-        port=DB_PORT
+        host=DB_HOST, database=DB_NAME, user=DB_USER, password=DB_PASSWORD, port=DB_PORT
     )
     return conn
+
 
 def create_tables():
     conn = get_connection()
     cur = conn.cursor()
-    
+
     # Bảng lưu thông tin Repository
     cur.execute("""
         CREATE TABLE IF NOT EXISTS repositories (
@@ -28,7 +26,7 @@ def create_tables():
             created_at TIMESTAMP
         );
     """)
-    
+
     # Bảng lưu thông tin Releases
     cur.execute("""
         CREATE TABLE IF NOT EXISTS releases (
@@ -40,7 +38,7 @@ def create_tables():
             html_url VARCHAR(500)
         );
     """)
-    
+
     # Bảng lưu thông tin Commits
     cur.execute("""
         CREATE TABLE IF NOT EXISTS commits (
@@ -53,11 +51,12 @@ def create_tables():
             html_url VARCHAR(500)
         );
     """)
-    
+
     conn.commit()
     cur.close()
     conn.close()
     print("Tables created successfully.")
+
 
 if __name__ == "__main__":
     create_tables()

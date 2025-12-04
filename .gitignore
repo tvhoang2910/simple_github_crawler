@@ -1,8 +1,8 @@
-__pycache__/database.cpython-312.pyc
-__pycache__/config.cpython-312.pyc
+__pycache__/
 pg-docker-demo/db/init/01-init.sql
 pg-docker-demo/docker-compose.yml
 pg-docker-demo/.env
-__pycache__/database.cpython-313.pyc
-__pycache__/config.cpython-313.pyc
 config.py
+.env
+test_gitstar.py
+crawler_5000_repo_with_github_token.log
