@@ -1,17 +1,22 @@
+"""
+GitHub Crawler Module
+
+This module crawls top GitHub repositories and saves repository metadata,
+releases, and commits to a PostgreSQL database using the GitHub REST API.
+"""
+
 import requests
 import time
 import logging
-from database import get_connection, create_tables
+from database import create_tables, upsert_repo_with_releases_and_commits
 from config import GITHUB_TOKEN
 
-# Cấu hình logging
 logging.basicConfig(
     filename='crawler_5000_repo_with_github_token.log',
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# Cấu hình Header cho request
 HEADERS = {
     "Accept": "application/vnd.github.v3+json"
 }
@@ -20,14 +25,27 @@ if GITHUB_TOKEN:
 
 def fetch_top_repositories(limit=5000):
     """
-    Tìm kiếm các repository nhiều sao nhất trên GitHub.
-    GitHub Search API giới hạn 1000 kết quả cho mỗi query.
-    Để lấy 5000, chia query theo ranges of stars.
+    Fetch the most-starred repositories from GitHub.
+    
+    GitHub Search API limits results to 1000 per query. To retrieve more repositories,
+    this function splits the search into multiple star-count ranges and aggregates results.
+    Repositories are deduplicated by their GitHub ID.
+    
+    Args:
+        limit (int): Maximum number of repositories to fetch. Default is 5000.
+    
+    Returns:
+        list: List of repository dictionaries containing GitHub API response data.
+              Each repository includes fields like id, name, full_name, html_url,
+              stargazers_count, language, and created_at.
+    
+    Note:
+        The function handles rate limits and network errors gracefully by logging
+        errors and stopping pagination for problematic ranges.
     """
     repos = []
-    seen_ids = set()  # Để tránh duplicate
+    seen_ids = set()
     
-    # Chia thành 5 ranges để lấy ~1000 repos mỗi lần
     star_ranges = [
         "stars:>=50000",
         "stars:10000..49999",
@@ -60,7 +78,6 @@ def fetch_top_repositories(limit=5000):
                 if not items:
                     break
                 
-                # Thêm repos chưa thấy
                 for item in items:
                     if item['id'] not in seen_ids:
                         repos.append(item)
@@ -85,6 +102,17 @@ def fetch_top_repositories(limit=5000):
     return repos[:limit]
 
 def fetch_releases(owner, repo_name):
+    """
+    Fetch the latest releases for a GitHub repository.
+    
+    Args:
+        owner (str): The GitHub username or organization name that owns the repository.
+        repo_name (str): The name of the repository.
+    
+    Returns:
+        list: List of release dictionaries from the GitHub API, or empty list on error.
+              Each release includes fields like name, tag_name, published_at, and html_url.
+    """
     url = f"https://api.github.com/repos/{owner}/{repo_name}/releases?per_page=5"
     try:
         response = requests.get(url, headers=HEADERS, timeout=10)
@@ -97,6 +125,17 @@ def fetch_releases(owner, repo_name):
     return []
 
 def fetch_commits(owner, repo_name):
+    """
+    Fetch the latest commits for a GitHub repository.
+    
+    Args:
+        owner (str): The GitHub username or organization name that owns the repository.
+        repo_name (str): The name of the repository.
+    
+    Returns:
+        list: List of commit dictionaries from the GitHub API, or empty list on error.
+              Each commit includes fields like sha, commit message, author, date, and html_url.
+    """
     url = f"https://api.github.com/repos/{owner}/{repo_name}/commits?per_page=5"
     try:
         response = requests.get(url, headers=HEADERS, timeout=10)
@@ -109,71 +148,92 @@ def fetch_commits(owner, repo_name):
     return []
 
 def save_to_db(repo):
-    conn = get_connection()
-    cur = conn.cursor()
+    """
+    Save repository data, releases, and commits to the database.
     
+    This function performs the following operations in a transaction:
+    1. Insert repository metadata into the repositories table (or skip if exists)
+    2. Fetch and insert the latest releases for the repository
+    3. Fetch and insert the latest commits for the repository
+    
+    Args:
+        repo (dict): Repository dictionary from GitHub API containing all metadata.
+    
+    Note:
+        All operations are performed in a single transaction with rollback on error.
+        Errors are logged and printed but don't stop the overall crawling process.
+    """
     try:
-        # 1. Insert Repository
         print(f"Processing repo: {repo['full_name']}")
-        cur.execute("""
-            INSERT INTO repositories (github_id, name, full_name, html_url, stargazers_count, language, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (github_id) DO NOTHING
-            RETURNING id;
-        """, (
-            repo['id'], repo['name'], repo['full_name'], repo['html_url'], 
-            repo['stargazers_count'], repo['language'], repo['created_at']
-        ))
         
-        repo_db_id = cur.fetchone()
+        owner = repo['owner']['login']
+        repo_name = repo['name']
         
-        # Nếu repo đã tồn tại, lấy ID của nó
-        if not repo_db_id:
-            cur.execute("SELECT id FROM repositories WHERE github_id = %s", (repo['id'],))
-            repo_db_id = cur.fetchone()
-            
-        if repo_db_id:
-            repo_id = repo_db_id[0]
-            
-            # 2. Fetch & Insert Releases
-            releases = fetch_releases(repo['owner']['login'], repo['name'])
-            for rel in releases:
-                cur.execute("""
-                    INSERT INTO releases (repo_id, release_name, tag_name, published_at, html_url)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (repo_id, rel.get('name'), rel.get('tag_name'), rel.get('published_at'), rel.get('html_url')))
-            
-            # 3. Fetch & Insert Commits
-            commits = fetch_commits(repo['owner']['login'], repo['name'])
-            for c in commits:
-                commit_info = c.get('commit', {})
-                author_info = commit_info.get('author', {})
-                cur.execute("""
-                    INSERT INTO commits (repo_id, sha, message, author_name, date, html_url)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (
-                    repo_id, c.get('sha'), commit_info.get('message'), 
-                    author_info.get('name'), author_info.get('date'), c.get('html_url')
-                ))
-                
-            conn.commit()
-            
+        releases = fetch_releases(owner, repo_name)
+        commits = fetch_commits(owner, repo_name)
+        
+        repo_data = {
+            'github_id': repo['id'],
+            'name': repo['name'],
+            'full_name': repo['full_name'],
+            'html_url': repo['html_url'],
+            'stargazers_count': repo.get('stargazers_count'),
+            'language': repo.get('language'),
+            'created_at': repo.get('created_at')
+        }
+        
+        releases_data = [
+            {
+                'name': rel.get('name'),
+                'tag_name': rel.get('tag_name'),
+                'published_at': rel.get('published_at'),
+                'html_url': rel.get('html_url')
+            }
+            for rel in releases
+        ]
+        
+        commits_data = [
+            {
+                'sha': c.get('sha'),
+                'message': c.get('commit', {}).get('message'),
+                'author_name': c.get('commit', {}).get('author', {}).get('name'),
+                'date': c.get('commit', {}).get('author', {}).get('date'),
+                'html_url': c.get('html_url')
+            }
+            for c in commits
+        ]
+        
+        result = upsert_repo_with_releases_and_commits(
+            repo_data,
+            releases_data,
+            commits_data
+        )
+        
+        if result['success']:
+            print(f"Successfully saved {repo['full_name']}")
+        
     except Exception as e:
         logging.error(f"Error saving repo {repo['full_name']}: {e}")
         print(f"Error saving repo {repo['full_name']}: {e}")
-        conn.rollback()
-    finally:
-        cur.close()
-        conn.close()
 
 def main():
+    """
+    Main entry point for the GitHub crawler.
+    
+    This function orchestrates the entire crawling process:
+    1. Creates database tables if they don't exist
+    2. Fetches top repositories from GitHub
+    3. Saves each repository's data, releases, and commits to the database
+    4. Reports total execution time
+    
+    Note:
+        This implementation does not include sleep/delays between requests,
+        which may trigger GitHub's rate limiting.
+    """
     start_time = time.time()
     
-    # Tạo bảng nếu chưa có
     create_tables()
     
-    # Lấy danh sách repo (Thử lấy 5000, nhưng API search chỉ cho tối đa 1000 kết quả đầu tiên)
-    # Đây là điểm yếu của phiên bản đơn giản này -> Cần cải tiến sau
     repos = fetch_top_repositories(limit=5000)
     
     print(f"Found {len(repos)} repositories. Starting detailed crawl...")
@@ -181,9 +241,6 @@ def main():
     for i, repo in enumerate(repos):
         save_to_db(repo)
         print(f"[{i+1}/{len(repos)}] Saved data for {repo['full_name']}")
-        
-        # Không sleep để dễ bị chặn (theo yêu cầu)
-        # time.sleep(0.5)
     
     end_time = time.time()
     total_time = end_time - start_time
