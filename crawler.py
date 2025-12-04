@@ -1,8 +1,19 @@
 import requests
 import time
 import logging
+import random
 from database import get_connection, create_tables
-from config import GITHUB_TOKEN, GITSTAR_BASE_URL, REQUEST_TIMEOUT, RATE_LIMIT_SLEEP
+from config import (
+    GITHUB_TOKENS,
+    GITSTAR_BASE_URL,
+    REQUEST_TIMEOUT,
+    RATE_LIMIT_SLEEP,
+    MAX_RETRIES,
+    BASE_RETRY_DELAY,
+    MAX_RETRY_DELAY,
+    CIRCUIT_BREAKER_FAIL_THRESHOLD,
+    CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+)
 from bs4 import BeautifulSoup
 
 # Cấu hình logging
@@ -97,60 +108,15 @@ def fetch_repos_from_gitstar(limit=5000):
 
 def get_repo_from_github_api(owner, repo_name):
     """
-    Lấy thông tin repo từ GitHub API (cần GITHUB_TOKEN để có rate limit cao hơn)
+    Lấy thông tin repo từ GitHub API sử dụng GitHubAPIClient
     """
     url = f"https://api.github.com/repos/{owner}/{repo_name}"
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+    response = github_client.make_request(url)
 
-        # Kiểm tra rate limit
-        remaining = response.headers.get("X-RateLimit-Remaining", "unknown")
-        reset_time = response.headers.get("X-RateLimit-Reset", "unknown")
-
-        if response.status_code == 200:
-            return response.json()
-        elif response.status_code == 403:
-            logging.error(
-                f"Rate limit exceeded for {owner}/{repo_name}. Remaining: {remaining}, Reset: {reset_time}"
-            )
-            print(f"⚠️  Rate limit exceeded! Remaining: {remaining}")
-
-            # Nếu không có token, skip thay vì sleep
-            if not GITHUB_TOKEN:
-                print(f"⚠️  No GITHUB_TOKEN set. Skipping {owner}/{repo_name}")
-                print(
-                    f"💡 Set GITHUB_TOKEN in .env to get 5000 requests/hour instead of 60/hour"
-                )
-                return None
-
-            # Có thể sleep tại đây để chờ reset (chỉ khi có token)
-            if reset_time != "unknown":
-                wait_time = int(reset_time) - time.time()
-                if wait_time > 0:
-                    logging.warning(
-                        f"Rate limit exceeded for {owner}/{repo_name}. Would need to wait {wait_time:.0f} seconds. Skipping this repo."
-                    )
-                    print(
-                        f"⚠️  Rate limit exceeded! Skipping {owner}/{repo_name} (wait time: {wait_time:.0f}s)"
-                    )
-                    return None
-        else:
-            logging.error(
-                f"Error fetching repo {owner}/{repo_name}: {response.status_code}"
-            )
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Network error fetching repo {owner}/{repo_name}: {e}")
+    if response and response.status_code == 200:
+        return response.json()
 
     return None
-
-
-# Cấu hình Header cho request
-HEADERS = {
-    "Accept": "application/vnd.github.v3+json",
-    "User-Agent": "GitHub-Crawler-Bot/1.0",
-}
-if GITHUB_TOKEN:
-    HEADERS["Authorization"] = f"token {GITHUB_TOKEN}"
 
 
 def fetch_top_repositories(limit=5000):
@@ -182,14 +148,9 @@ def fetch_top_repositories(limit=5000):
 
         while len(repos) < limit:
             url = f"https://api.github.com/search/repositories?q={star_range}&sort=stars&order=desc&per_page={per_page}&page={page}"
-            try:
-                response = requests.get(url, headers=HEADERS, timeout=10)
-            except requests.exceptions.RequestException as e:
-                logging.error(f"Network error fetching repos: {e}")
-                print(f"Network error: {e}")
-                break
+            response = github_client.make_request(url)
 
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 data = response.json()
                 items = data.get("items", [])
                 if not items:
@@ -204,51 +165,28 @@ def fetch_top_repositories(limit=5000):
                 print(f"Fetched page {page} ({star_range}), total repos: {len(repos)}")
                 page += 1
 
-            elif response.status_code == 422:
+            elif response and response.status_code == 422:
                 logging.error(f"Invalid query or pagination exceeded: {response.text}")
                 print(f"Pagination limit reached for {star_range}")
                 break
-            elif response.status_code == 403:
-                logging.error(f"Rate limit: {response.json()}")
-                print("Rate limit exceeded!")
-                break
             else:
-                logging.error(
-                    f"Error fetching repos: {response.status_code} - {response.text}"
-                )
-                print(f"Error fetching repos: {response.status_code}")
                 break
-
     return repos[:limit]
 
 
 def fetch_releases(owner, repo_name):
     url = f"https://api.github.com/repos/{owner}/{repo_name}/releases?per_page=5"
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            logging.error(
-                f"Error fetching releases for {owner}/{repo_name}: {response.status_code} - {response.text}"
-            )
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Network error fetching releases for {owner}/{repo_name}: {e}")
+    response = github_client.make_request(url)
+    if response and response.status_code == 200:
+        return response.json()
     return []
 
 
 def fetch_commits(owner, repo_name):
     url = f"https://api.github.com/repos/{owner}/{repo_name}/commits?per_page=5"
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            logging.error(
-                f"Error fetching commits for {owner}/{repo_name}: {response.status_code} - {response.text}"
-            )
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Network error fetching commits for {owner}/{repo_name}: {e}")
+    response = github_client.make_request(url)
+    if response and response.status_code == 200:
+        return response.json()
     return []
 
 
@@ -356,6 +294,131 @@ def save_to_db(repo):
         conn.close()
 
     return releases_count, commits_count
+
+
+class GitHubAPIClient:
+    def __init__(self):
+        self.tokens = GITHUB_TOKENS
+        self.current_token_index = 0
+        self.consecutive_failures = 0
+        self.circuit_open_time = 0
+        self.is_circuit_open = False
+
+    def _get_headers(self):
+        headers = {"Accept": "application/vnd.github.v3+json"}
+        if self.tokens:
+            token = self.tokens[self.current_token_index]
+            headers["Authorization"] = f"token {token}"
+        return headers
+
+    def _rotate_token(self):
+        if not self.tokens or len(self.tokens) <= 1:
+            return False
+        self.current_token_index = (self.current_token_index + 1) % len(self.tokens)
+        print(f"🔄 Rotating to token index {self.current_token_index}")
+        return True
+
+    def _check_circuit_breaker(self):
+        if self.is_circuit_open:
+            if time.time() - self.circuit_open_time > CIRCUIT_BREAKER_RECOVERY_TIMEOUT:
+                print("🔌 Circuit Breaker: Half-Open (Testing connection...)")
+                self.is_circuit_open = False
+                self.consecutive_failures = 0
+                return True  # Allow request
+            else:
+                return False  # Circuit still open
+        return True
+
+    def _record_failure(self):
+        self.consecutive_failures += 1
+        if self.consecutive_failures >= CIRCUIT_BREAKER_FAIL_THRESHOLD:
+            self.is_circuit_open = True
+            self.circuit_open_time = time.time()
+            print(
+                f"🔌 Circuit Breaker: OPENED due to {self.consecutive_failures} consecutive failures."
+            )
+
+    def _record_success(self):
+        self.consecutive_failures = 0
+        self.is_circuit_open = False
+
+    def make_request(self, url, params=None):
+        if not self._check_circuit_breaker():
+            print("🔌 Circuit Breaker is OPEN. Skipping request.")
+            return None
+
+        retries = 0
+        while retries <= MAX_RETRIES:
+            try:
+                headers = self._get_headers()
+                response = requests.get(
+                    url, headers=headers, params=params, timeout=REQUEST_TIMEOUT
+                )
+
+                # Handle Rate Limits (403/429)
+                if response.status_code in [403, 429]:
+                    remaining = response.headers.get("X-RateLimit-Remaining", "unknown")
+                    print(
+                        f"⚠️ Rate limit hit (Status {response.status_code}). Remaining: {remaining}"
+                    )
+
+                    # Try rotating token first
+                    if self._rotate_token():
+                        print("🔄 Retrying with new token...")
+                        continue  # Retry immediately with new token
+                    else:
+                        # No tokens or single token, must wait
+                        reset_time = response.headers.get("X-RateLimit-Reset")
+                        if reset_time:
+                            wait_time = int(reset_time) - time.time() + 1
+                            if wait_time > 0:
+                                print(
+                                    f"⏳ Sleeping {wait_time:.0f}s for rate limit reset..."
+                                )
+                                time.sleep(
+                                    min(wait_time, 60)
+                                )  # Cap sleep for safety? Or just sleep.
+                                # If we sleep, we can retry.
+                                continue
+
+                # Handle Server Errors (5xx) -> Retry with Backoff
+                if 500 <= response.status_code < 600:
+                    raise requests.exceptions.RequestException(
+                        f"Server Error {response.status_code}"
+                    )
+
+                # Success
+                if response.status_code == 200:
+                    self._record_success()
+                    return response
+
+                # Other client errors (404, etc) - Don't retry
+                self._record_success()  # It's a successful connection, just a bad request
+                return response
+
+            except requests.exceptions.RequestException as e:
+                print(f"❌ Network Error: {e}")
+                self._record_failure()
+
+                retries += 1
+                if retries > MAX_RETRIES:
+                    print(f"❌ Max retries exceeded for {url}")
+                    break
+
+                # Exponential Backoff + Jitter
+                delay = min(MAX_RETRY_DELAY, (BASE_RETRY_DELAY * (2 ** (retries - 1))))
+                jitter = random.uniform(0, 0.1 * delay)
+                sleep_time = delay + jitter
+                print(
+                    f"⏳ Retrying in {sleep_time:.2f}s (Attempt {retries}/{MAX_RETRIES})..."
+                )
+                time.sleep(sleep_time)
+
+        return None
+
+
+# Initialize global client
+github_client = GitHubAPIClient()
 
 
 def main():
