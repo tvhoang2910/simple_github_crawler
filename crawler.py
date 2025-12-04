@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 # Cấu hình logging
 logging.basicConfig(
     filename="crawler_5000_repo_with_github_token.log",
-    level=logging.ERROR,
+    level=logging.INFO,  # Đổi từ ERROR thành INFO để ghi tất cả log
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
@@ -64,7 +64,7 @@ def fetch_repos_from_gitstar(limit=5000):
             response = requests.get(
                 url,
                 headers={"User-Agent": "GitHub-Crawler-Bot/1.0"},
-                timeout=REQUEST_TIMEOUT,
+                timeout=30,  # Tăng timeout cho Gitstar (30 giây thay vì 10)
             )
             if response.status_code != 200:
                 logging.error(
@@ -99,8 +99,9 @@ def fetch_repos_from_gitstar(limit=5000):
 
         except requests.exceptions.RequestException as e:
             logging.error(f"Network error fetching Gitstar page {page}: {e}")
-            print(f"Network error: {e}")
-            break
+            print(f"Network error: {e}. Retrying in 5 seconds...")
+            time.sleep(5)  # Retry sau 5 giây
+            continue  # Thử lại trang hiện tại
 
     print(f"Finished fetching {len(repos)} repositories from Gitstar")
     return repos[:limit]
@@ -114,9 +115,18 @@ def get_repo_from_github_api(owner, repo_name):
     response = github_client.make_request(url)
 
     if response and response.status_code == 200:
-        return response.json()
-
-    return None
+        repo_data = response.json()
+        print(f"✅ Fetched repo: {owner}/{repo_name}")
+        logging.info(f"Fetched repo: {owner}/{repo_name}")
+        return repo_data
+    else:
+        status_code = response.status_code if response else "No response"
+        error_msg = f"Failed to fetch repo {owner}/{repo_name}: Status {status_code}"
+        if response:
+            error_msg += f" - {response.text[:200]}"  # Limit error text
+        logging.error(error_msg)
+        print(f"❌ {error_msg}")
+        return None
 
 
 def fetch_top_repositories(limit=5000):
@@ -178,7 +188,10 @@ def fetch_releases(owner, repo_name):
     url = f"https://api.github.com/repos/{owner}/{repo_name}/releases?per_page=5"
     response = github_client.make_request(url)
     if response and response.status_code == 200:
-        return response.json()
+        releases = response.json()
+        print(f"✅ Fetched {len(releases)} releases for {owner}/{repo_name}")
+        logging.info(f"Fetched {len(releases)} releases for {owner}/{repo_name}")
+        return releases
     return []
 
 
@@ -186,7 +199,10 @@ def fetch_commits(owner, repo_name):
     url = f"https://api.github.com/repos/{owner}/{repo_name}/commits?per_page=5"
     response = github_client.make_request(url)
     if response and response.status_code == 200:
-        return response.json()
+        commits = response.json()
+        print(f"✅ Fetched {len(commits)} commits for {owner}/{repo_name}")
+        logging.info(f"Fetched {len(commits)} commits for {owner}/{repo_name}")
+        return commits
     return []
 
 
@@ -262,6 +278,10 @@ def save_to_db(repo):
                 )
                 releases_count += 1
 
+            if releases_count > 0:
+                print(f"✅ Saved {releases_count} releases for {repo['full_name']}")
+                logging.info(f"Saved {releases_count} releases for {repo['full_name']}")
+
             # 3. Fetch & Insert Commits
             commits = fetch_commits(repo["owner"]["login"], repo["name"])
             for c in commits:
@@ -282,6 +302,10 @@ def save_to_db(repo):
                     ),
                 )
                 commits_count += 1
+
+            if commits_count > 0:
+                print(f"✅ Saved {commits_count} commits for {repo['full_name']}")
+                logging.info(f"Saved {commits_count} commits for {repo['full_name']}")
 
             conn.commit()
 
@@ -424,47 +448,63 @@ github_client = GitHubAPIClient()
 def main():
     start_time = time.time()
 
-    # Tạo bảng nếu chưa có
-    create_tables()
+    try:
+        # Tạo bảng nếu chưa có
+        create_tables()
 
-    # Lấy danh sách repo từ Gitstar-ranking (vượt qua giới hạn 1000 của GitHub Search API)
-    print(
-        "Strategy: Using Gitstar-ranking.com as data source (bypass GitHub Search API limit of 1000)"
-    )
-    repos = fetch_repos_from_gitstar(limit=5000)
-
-    if not repos:
-        print("No repositories found. Exiting.")
-        return
-
-    print(f"Found {len(repos)} repositories. Starting detailed crawl...")
-
-    total_releases = 0
-    total_commits = 0
-    failed_repos = 0
-
-    for i, repo in enumerate(repos):
-        releases_count, commits_count = save_to_db(repo)
-        total_releases += releases_count
-        total_commits += commits_count
-        if releases_count == 0 and commits_count == 0:
-            failed_repos += 1
+        # Lấy danh sách repo từ Gitstar-ranking (vượt qua giới hạn 1000 của GitHub Search API)
         print(
-            f"[{i + 1}/{len(repos)}] Processed {repo} (Releases: {releases_count}, Commits: {commits_count})"
+            "Strategy: Using Gitstar-ranking.com as data source (bypass GitHub Search API limit of 1000)"
+        )
+        repos = fetch_repos_from_gitstar(limit=10)
+
+        if not repos:
+            print("No repositories found. Exiting.")
+            return
+
+        print(f"Found {len(repos)} repositories. Starting detailed crawl...")
+
+        total_releases = 0
+        total_commits = 0
+        failed_repos = 0
+
+        for i, repo in enumerate(repos):
+            releases_count, commits_count = save_to_db(repo)
+            total_releases += releases_count
+            total_commits += commits_count
+            if releases_count == 0 and commits_count == 0:
+                failed_repos += 1
+            print(
+                f"[{i + 1}/{len(repos)}] Processed {repo} (Releases: {releases_count}, Commits: {commits_count})"
+            )
+
+            # Sleep để tránh rate limit
+            time.sleep(RATE_LIMIT_SLEEP)
+
+        end_time = time.time()
+        total_time = end_time - start_time
+        print(
+            f"\nCrawling completed in {total_time:.2f} seconds ({total_time / 60:.2f} minutes)"
+        )
+        print(f"Failed repos: {failed_repos}")
+
+        # Log thời gian hoàn thành
+        log_completion(
+            total_time, len(repos) - failed_repos, total_releases, total_commits
         )
 
-        # Sleep để tránh rate limit
-        time.sleep(RATE_LIMIT_SLEEP)
-
-    end_time = time.time()
-    total_time = end_time - start_time
-    print(
-        f"\nCrawling completed in {total_time:.2f} seconds ({total_time / 60:.2f} minutes)"
-    )
-    print(f"Failed repos: {failed_repos}")
-
-    # Log thời gian hoàn thành
-    log_completion(total_time, len(repos) - failed_repos, total_releases, total_commits)
+    except KeyboardInterrupt:
+        end_time = time.time()
+        total_time = end_time - start_time
+        print(f"\n⚠️ Crawling interrupted by user after {total_time:.2f} seconds")
+        print(f"Processed repos so far: {i + 1 if 'i' in locals() else 0}")
+        # Log partial completion
+        log_completion(
+            total_time,
+            i + 1 if "i" in locals() else 0,
+            total_releases if "total_releases" in locals() else 0,
+            total_commits if "total_commits" in locals() else 0,
+        )
 
 
 if __name__ == "__main__":

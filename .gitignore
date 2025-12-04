@@ -5,4 +5,3 @@ pg-docker-demo/.env
 config.py
 .env
 test_gitstar.py
-crawler_5000_repo_with_github_token.log

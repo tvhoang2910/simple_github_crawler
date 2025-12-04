@@ -1,0 +1,68 @@
+============================================================
+CRAWL COMPLETED
+Total Time: 2148.75 seconds (35.81 minutes)
+Repositories Processed: 500
+Total Releases: 1537
+Total Commits: 2490
+Average Time per Repo: 4.30 seconds
+Average Releases per Repo: 3.07
+Average Commits per Repo: 4.98
+Timestamp: 2025-12-04 18:41:25
+============================================================
+500 repo mất 2148.75 seconds to crawl.
+=> 5000 repo mất khoảng 21487.5 seconds (5.97 hours) to crawl.2025-12-04 18:44:36,449 - ERROR - Network error fetching Gitstar page 1: HTTPSConnectionPool(host='gitstar-ranking.com', port=443): Read timed out. (read timeout=30)
+2025-12-04 18:44:44,461 - INFO - Fetched repo: freeCodeCamp/freeCodeCamp
+2025-12-04 18:44:45,124 - INFO - Fetched 0 releases for freeCodeCamp/freeCodeCamp
+2025-12-04 18:44:45,823 - INFO - Fetched 5 commits for freeCodeCamp/freeCodeCamp
+2025-12-04 18:44:45,826 - INFO - Saved 5 commits for freeCodeCamp/freeCodeCamp
+2025-12-04 18:44:47,066 - INFO - Fetched repo: sindresorhus/awesome
+2025-12-04 18:44:47,763 - INFO - Fetched 0 releases for sindresorhus/awesome
+2025-12-04 18:44:48,478 - INFO - Fetched 5 commits for sindresorhus/awesome
+2025-12-04 18:44:48,483 - INFO - Saved 5 commits for sindresorhus/awesome
+2025-12-04 18:44:49,824 - INFO - Fetched repo: EbookFoundation/free-programming-books
+2025-12-04 18:44:50,504 - INFO - Fetched 0 releases for EbookFoundation/free-programming-books
+2025-12-04 18:44:51,166 - INFO - Fetched 5 commits for EbookFoundation/free-programming-books
+2025-12-04 18:44:51,171 - INFO - Saved 5 commits for EbookFoundation/free-programming-books
+2025-12-04 18:44:52,403 - INFO - Fetched repo: kamranahmedse/developer-roadmap
+2025-12-04 18:44:53,130 - INFO - Fetched 1 releases for kamranahmedse/developer-roadmap
+2025-12-04 18:44:53,133 - INFO - Saved 1 releases for kamranahmedse/developer-roadmap
+2025-12-04 18:44:53,909 - INFO - Fetched 5 commits for kamranahmedse/developer-roadmap
+2025-12-04 18:44:53,913 - INFO - Saved 5 commits for kamranahmedse/developer-roadmap
+2025-12-04 18:44:55,224 - INFO - Fetched repo: jwasham/coding-interview-university
+2025-12-04 18:44:55,911 - INFO - Fetched 0 releases for jwasham/coding-interview-university
+2025-12-04 18:44:56,616 - INFO - Fetched 5 commits for jwasham/coding-interview-university
+2025-12-04 18:44:56,620 - INFO - Saved 5 commits for jwasham/coding-interview-university
+2025-12-04 18:44:57,851 - INFO - Fetched repo: donnemartin/system-design-primer
+2025-12-04 18:44:58,507 - INFO - Fetched 0 releases for donnemartin/system-design-primer
+2025-12-04 18:44:59,171 - INFO - Fetched 5 commits for donnemartin/system-design-primer
+2025-12-04 18:44:59,175 - INFO - Saved 5 commits for donnemartin/system-design-primer
+2025-12-04 18:45:00,439 - INFO - Fetched repo: 996icu/996.ICU
+2025-12-04 18:45:01,168 - INFO - Fetched 0 releases for 996icu/996.ICU
+2025-12-04 18:45:01,880 - INFO - Fetched 5 commits for 996icu/996.ICU
+2025-12-04 18:45:01,884 - INFO - Saved 5 commits for 996icu/996.ICU
+2025-12-04 18:45:03,137 - INFO - Fetched repo: vinta/awesome-python
+2025-12-04 18:45:03,789 - INFO - Fetched 0 releases for vinta/awesome-python
+2025-12-04 18:45:04,424 - INFO - Fetched 5 commits for vinta/awesome-python
+2025-12-04 18:45:04,428 - INFO - Saved 5 commits for vinta/awesome-python
+2025-12-04 18:45:05,697 - INFO - Fetched repo: awesome-selfhosted/awesome-selfhosted
+2025-12-04 18:45:06,416 - INFO - Fetched 1 releases for awesome-selfhosted/awesome-selfhosted
+2025-12-04 18:45:06,419 - INFO - Saved 1 releases for awesome-selfhosted/awesome-selfhosted
+2025-12-04 18:45:07,087 - INFO - Fetched 5 commits for awesome-selfhosted/awesome-selfhosted
+2025-12-04 18:45:07,091 - INFO - Saved 5 commits for awesome-selfhosted/awesome-selfhosted
+2025-12-04 18:45:08,460 - INFO - Fetched repo: facebook/react
+2025-12-04 18:45:09,279 - INFO - Fetched 5 releases for facebook/react
+2025-12-04 18:45:09,283 - INFO - Saved 5 releases for facebook/react
+2025-12-04 18:45:09,996 - INFO - Fetched 5 commits for facebook/react
+2025-12-04 18:45:10,000 - INFO - Saved 5 commits for facebook/react
+
+============================================================
+CRAWL COMPLETED
+Total Time: 65.13 seconds (1.09 minutes)
+Repositories Processed: 10
+Total Releases: 7
+Total Commits: 50
+Average Time per Repo: 6.51 seconds
+Average Releases per Repo: 0.70
+Average Commits per Repo: 5.00
+Timestamp: 2025-12-04 18:45:10
+============================================================
