@@ -1,4 +1,4 @@
-============================================================
+    ============================================================
 CRAWL COMPLETED
 Total Time: 2148.75 seconds (35.81 minutes)
 Repositories Processed: 500
@@ -10,7 +10,8 @@ Average Commits per Repo: 4.98
 Timestamp: 2025-12-04 18:41:25
 ============================================================
 500 repo mất 2148.75 seconds to crawl.
-=> 5000 repo mất khoảng 21487.5 seconds (5.97 hours) to crawl.2025-12-04 18:44:36,449 - ERROR - Network error fetching Gitstar page 1: HTTPSConnectionPool(host='gitstar-ranking.com', port=443): Read timed out. (read timeout=30)
+=> 5000 repo mất khoảng 21487.5 seconds (5.97 hours) to crawl.
+2025-12-04 18:44:36,449 - ERROR - Network error fetching Gitstar page 1: HTTPSConnectionPool(host='gitstar-ranking.com', port=443): Read timed out. (read timeout=30)
 2025-12-04 18:44:44,461 - INFO - Fetched repo: freeCodeCamp/freeCodeCamp
 2025-12-04 18:44:45,124 - INFO - Fetched 0 releases for freeCodeCamp/freeCodeCamp
 2025-12-04 18:44:45,823 - INFO - Fetched 5 commits for freeCodeCamp/freeCodeCamp
