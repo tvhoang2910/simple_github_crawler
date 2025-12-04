@@ -36,10 +36,15 @@ REDIS_URL = os.getenv("REDIS_URL", f"redis://{REDIS_HOST}:{REDIS_PORT}")
 raw_tokens = os.getenv("GITHUB_TOKENS", "")
 GITHUB_TOKENS = [t.strip() for t in raw_tokens.split(",") if t.strip()]
 
+# Backward compatibility - single token
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+if GITHUB_TOKEN and not GITHUB_TOKENS:
+    GITHUB_TOKENS = [GITHUB_TOKEN]
+
 if not GITHUB_TOKENS:
     raise ValueError(
         "No GitHub tokens provided. "
-        "Please set GITHUB_TOKENS environment variable with comma-separated tokens."
+        "Please set GITHUB_TOKENS or GITHUB_TOKEN environment variable."
     )
 
 # -------------------------------
