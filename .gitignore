@@ -5,4 +5,18 @@ pg-docker-demo/docker-compose.yml
 pg-docker-demo/.env
 __pycache__/database.cpython-313.pyc
 __pycache__/config.cpython-313.pyc
-config.py
+#! Do not ignore config.py in the root
+
+# Local environment files (should NOT be tracked)
+# Ignore dotenv files, but keep the example
+.env
+.env.local
+.env.*
+!.env.example
+# Ignore dotenv cache
+# Note: keep .env.example with a '!' negation above; don't add .env.* here again
+
+# Sensitive local IDE / OS files
+.vscode/
+Thumbs.db
+desktop.ini
