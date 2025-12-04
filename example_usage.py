@@ -1,25 +1,25 @@
 """
-Example usage script for Tortoise ORM database operations.
+Example usage script for database operations.
 
-This demonstrates how to use the ServiceFactory and database_tortoise
-modules to perform upsert operations on GitHub repository data.
+This demonstrates how to use the ServiceFactory and database modules
+to perform both sync and async upsert operations on GitHub repository data.
 """
 
 import asyncio
 from service import ServiceFactory
-from database_tortoise import upsert_repo_with_releases_and_commits
+from database import async_upsert_repo_with_releases_and_commits
 
 
-async def example_usage():
+async def example_async_usage():
     """
-    Example demonstrating how to initialize ORM and perform upsert operations.
+    Example demonstrating how to initialize ORM and perform async upsert operations.
     """
     # Initialize Tortoise ORM with models
     await ServiceFactory.init_orm(["models"], generate_schemas=True)
     
     try:
-        # Example upsert operation
-        result = await upsert_repo_with_releases_and_commits(
+        # Example async upsert operation
+        result = await async_upsert_repo_with_releases_and_commits(
             owner="octocat",
             repo_name="Hello-World",
             releases_with_commits=[
@@ -53,4 +53,4 @@ async def example_usage():
 
 
 if __name__ == "__main__":
-    asyncio.run(example_usage())
+    asyncio.run(example_async_usage())
