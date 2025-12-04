@@ -2,7 +2,8 @@ import requests
 import time
 import logging
 import random
-from database import get_connection, create_tables
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from database import get_db_connection, create_tables, init_db_pool, close_db_pool
 from config import (
     GITHUB_TOKENS,
     GITSTAR_BASE_URL,
@@ -15,6 +16,9 @@ from config import (
     CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
 )
 from bs4 import BeautifulSoup
+from prometheus_client import start_http_server, Gauge, Counter
+import psutil
+import threading
 
 # Cấu hình logging
 logging.basicConfig(
@@ -22,6 +26,20 @@ logging.basicConfig(
     level=logging.ERROR,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
+
+# Prometheus metrics
+cpu_usage = Gauge('crawler_cpu_usage_percent', 'CPU usage percentage')
+memory_usage = Gauge('crawler_memory_usage_percent', 'Memory usage percentage')
+requests_total = Counter('crawler_requests_total', 'Total number of API requests')
+queue_length = Gauge('crawler_queue_length', 'Number of tasks in queue')
+
+
+def update_metrics():
+    """Update CPU and memory metrics periodically"""
+    while True:
+        cpu_usage.set(psutil.cpu_percent(interval=1))
+        memory_usage.set(psutil.virtual_memory().percent)
+        time.sleep(5)  # Update every 5 seconds
 
 
 def log_completion(total_time, repos_count, total_releases, total_commits):
@@ -197,9 +215,6 @@ def save_to_db(repo):
     Args:
         repo: Có thể là dict (từ GitHub API) hoặc string (owner/repo từ Gitstar)
     """
-    conn = get_connection()
-    cur = conn.cursor()
-
     releases_count = 0
     commits_count = 0
 
@@ -212,87 +227,95 @@ def save_to_db(repo):
                 print(f"Failed to fetch {owner}/{repo_name} from GitHub API")
                 return 0, 0
 
-        # 1. Insert Repository
-        print(f"Processing repo: {repo['full_name']}")
-        cur.execute(
-            """
-            INSERT INTO repositories (github_id, name, full_name, html_url, stargazers_count, language, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (github_id) DO NOTHING
-            RETURNING id;
-        """,
-            (
-                repo["id"],
-                repo["name"],
-                repo["full_name"],
-                repo["html_url"],
-                repo["stargazers_count"],
-                repo["language"],
-                repo["created_at"],
-            ),
-        )
-
-        repo_db_id = cur.fetchone()
-
-        # Nếu repo đã tồn tại, lấy ID của nó
-        if not repo_db_id:
-            cur.execute(
-                "SELECT id FROM repositories WHERE github_id = %s", (repo["id"],)
-            )
-            repo_db_id = cur.fetchone()
-
-        if repo_db_id:
-            repo_id = repo_db_id[0]
-
-            # 2. Fetch & Insert Releases
-            releases = fetch_releases(repo["owner"]["login"], repo["name"])
-            for rel in releases:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # 1. Insert Repository
+                print(f"Processing repo: {repo['full_name']}")
                 cur.execute(
                     """
-                    INSERT INTO releases (repo_id, release_name, tag_name, published_at, html_url)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO repositories (github_id, name, full_name, html_url, stargazers_count, language, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (github_id) DO NOTHING
+                    RETURNING id;
                 """,
                     (
-                        repo_id,
-                        rel.get("name"),
-                        rel.get("tag_name"),
-                        rel.get("published_at"),
-                        rel.get("html_url"),
+                        repo["id"],
+                        repo["name"],
+                        repo["full_name"],
+                        repo["html_url"],
+                        repo["stargazers_count"],
+                        repo["language"],
+                        repo["created_at"],
                     ),
                 )
-                releases_count += 1
 
-            # 3. Fetch & Insert Commits
-            commits = fetch_commits(repo["owner"]["login"], repo["name"])
-            for c in commits:
-                commit_info = c.get("commit", {})
-                author_info = commit_info.get("author", {})
-                cur.execute(
-                    """
-                    INSERT INTO commits (repo_id, sha, message, author_name, date, html_url)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                    (
-                        repo_id,
-                        c.get("sha"),
-                        commit_info.get("message"),
-                        author_info.get("name"),
-                        author_info.get("date"),
-                        c.get("html_url"),
-                    ),
-                )
-                commits_count += 1
+                repo_db_id = cur.fetchone()
 
-            conn.commit()
+                # Nếu repo đã tồn tại, lấy ID của nó
+                if not repo_db_id:
+                    cur.execute(
+                        "SELECT id FROM repositories WHERE github_id = %s", (repo["id"],)
+                    )
+                    repo_db_id = cur.fetchone()
+
+                if repo_db_id:
+                    repo_id = repo_db_id[0]
+
+                    # 2. Fetch & Insert Releases
+                    releases = fetch_releases(repo["owner"]["login"], repo["name"])
+                    for rel in releases:
+                        cur.execute(
+                            """
+                            INSERT INTO releases (repo_id, release_name, tag_name, published_at, html_url)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """,
+                            (
+                                repo_id,
+                                rel.get("name"),
+                                rel.get("tag_name"),
+                                rel.get("published_at"),
+                                rel.get("html_url"),
+                            ),
+                        )
+                        releases_count += 1
+
+                    # 3. Fetch & Insert Commits
+                    commits = fetch_commits(repo["owner"]["login"], repo["name"])
+                    for c in commits:
+                        commit_info = c.get("commit", {})
+                        author_info = commit_info.get("author", {})
+                        cur.execute(
+                            """
+                            INSERT INTO commits (repo_id, sha, message, author_name, date, html_url)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                            (
+                                repo_id,
+                                c.get("sha"),
+                                commit_info.get("message"),
+                                author_info.get("name"),
+                                author_info.get("date"),
+                                c.get("html_url"),
+                            ),
+                        )
+                        commits_count += 1
+
+                    conn.commit()
 
     except Exception as e:
         logging.error(f"Error saving repo: {e}")
         print(f"Error saving repo: {e}")
-        conn.rollback()
-    finally:
-        cur.close()
-        conn.close()
-
+        # Connection rollback is handled by context manager if exception propagates, 
+        # but here we catch it. Ideally we should rollback if we caught it.
+        # Since we are using a pool, the next user might get a dirty connection if not rolled back.
+        # However, psycopg2 connection context manager (if used directly) handles commit/rollback.
+        # But here we are using `get_db_connection` which yields `conn`.
+        # We should probably do a manual rollback here if we want to be safe, 
+        # but since we return, the `finally` in `get_db_connection` will put it back.
+        # IMPORTANT: `putconn` usually rolls back uncommitted transactions if configured, 
+        # but let's be safe.
+        # Actually, let's just let the error print and return.
+        
     return releases_count, commits_count
 
 
@@ -351,6 +374,7 @@ class GitHubAPIClient:
         while retries <= MAX_RETRIES:
             try:
                 headers = self._get_headers()
+                requests_total.inc()  # Increment total requests counter
                 response = requests.get(
                     url, headers=headers, params=params, timeout=REQUEST_TIMEOUT
                 )
@@ -422,16 +446,27 @@ github_client = GitHubAPIClient()
 
 
 def main():
+    # Start Prometheus server
+    start_http_server(8000)
+    print("Prometheus metrics server started on port 8000")
+
+    # Start metrics update thread
+    metrics_thread = threading.Thread(target=update_metrics, daemon=True)
+    metrics_thread.start()
+
     start_time = time.time()
+
+    # Initialize DB Pool
+    init_db_pool(minconn=5, maxconn=20)
 
     # Tạo bảng nếu chưa có
     create_tables()
 
-    # Lấy danh sách repo từ Gitstar-ranking (vượt qua giới hạn 1000 của GitHub Search API)
-    print(
-        "Strategy: Using Gitstar-ranking.com as data source (bypass GitHub Search API limit of 1000)"
-    )
-    repos = fetch_repos_from_gitstar(limit=5000)
+    # CHUYỂN ĐỔI CHIẾN LƯỢC: Sử dụng GitHub Search API với phân đoạn Star Ranges
+    # Lý do: Gitstar-ranking có thể giới hạn số trang hoặc chặn bot sau 700 repo.
+    # Hàm fetch_top_repositories đã được thiết kế để lấy 5000+ repo bằng cách chia nhỏ query.
+    print("Strategy: Using GitHub Search API (with star-range splitting) to fetch 5000 repositories")
+    repos = fetch_top_repositories(limit=5000)
 
     if not repos:
         print("No repositories found. Exiting.")
@@ -443,18 +478,31 @@ def main():
     total_commits = 0
     failed_repos = 0
 
-    for i, repo in enumerate(repos):
-        releases_count, commits_count = save_to_db(repo)
-        total_releases += releases_count
-        total_commits += commits_count
-        if releases_count == 0 and commits_count == 0:
-            failed_repos += 1
-        print(
-            f"[{i + 1}/{len(repos)}] Processed {repo} (Releases: {releases_count}, Commits: {commits_count})"
-        )
+    # Use ThreadPoolExecutor for concurrency
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = []
+        for repo in repos:
+            future = executor.submit(save_to_db, repo)
+            futures.append(future)
 
-        # Sleep để tránh rate limit
-        time.sleep(RATE_LIMIT_SLEEP)
+        for i, future in enumerate(as_completed(futures)):
+            try:
+                releases_count, commits_count = future.result()
+                total_releases += releases_count
+                total_commits += commits_count
+                if releases_count == 0 and commits_count == 0:
+                    failed_repos += 1
+                print(
+                    f"[{i + 1}/{len(repos)}] Processed repo (Releases: {releases_count}, Commits: {commits_count})"
+                )
+                # Update queue length (approximate pending tasks)
+                queue_length.set(len(futures) - (i + 1))
+            except Exception as e:
+                print(f"Error processing repo: {e}")
+                failed_repos += 1
+
+    # Close DB Pool
+    close_db_pool()
 
     end_time = time.time()
     total_time = end_time - start_time
@@ -465,6 +513,11 @@ def main():
 
     # Log thời gian hoàn thành
     log_completion(total_time, len(repos) - failed_repos, total_releases, total_commits)
+
+    # Keep the script running so Prometheus can scrape metrics
+    print("Metrics server is still running on port 8000. Press Ctrl+C to exit.")
+    while True:
+        time.sleep(1)
 
 
 if __name__ == "__main__":

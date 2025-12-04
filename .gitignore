@@ -6,3 +6,8 @@ config.py
 .env
 test_gitstar.py
 crawler_5000_repo_with_github_token.log
+grafana.zip
+grafana-10.2.0/
+prometheus-2.45.0.windows-amd64/
+prometheus.yml
+prometheus.zip
