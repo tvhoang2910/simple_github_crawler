@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.database.connection import DatabaseConnectionPool, create_tables_sync
 from app.crawler.fetcher import fetch_top_repositories
 from app.crawler.processor import process_repository, redis_manager
+from app.utils.metrics import QUEUE_SIZE
 
 def queue_worker():
     """
@@ -13,6 +14,13 @@ def queue_worker():
     print("Queue worker started...")
     
     while True:
+        # Update Queue Size Metric
+        try:
+            size = redis_manager.get_queue_size()
+            QUEUE_SIZE.set(size)
+        except:
+            pass
+            
         repo_data = redis_manager.pop_from_queue(timeout=5)
         
         if repo_data is None:
@@ -88,7 +96,8 @@ def main_with_threading(limit: int = 5000, max_workers: int = 10):
     print(f"Successfully processed: {success_count}")
     print(f"Failed: {failure_count}")
     print(f"Total time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
-    print(f"Average time per repo: {total_time/len(repos):.2f} seconds")
+    if len(repos) > 0:
+        print(f"Average time per repo: {total_time/len(repos):.2f} seconds")
     print(f"{'='*70}\n")
 
 

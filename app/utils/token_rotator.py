@@ -1,5 +1,6 @@
 import logging
 from typing import List, Dict
+from app.utils.metrics import TOKEN_SWITCH_COUNT
 
 class GitHubTokenRotator:
     """Manages rotation of GitHub tokens to maximize rate limits."""
@@ -16,6 +17,10 @@ class GitHubTokenRotator:
         token = self.tokens[self.current_index]
         self.current_index = (self.current_index + 1) % len(self.tokens)
         self.token_stats[token]["requests"] += 1
+        
+        # Increment Prometheus metric
+        TOKEN_SWITCH_COUNT.inc()
+        
         return token
     
     def get_headers(self) -> Dict[str, str]:

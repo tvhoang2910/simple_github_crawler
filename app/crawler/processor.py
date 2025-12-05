@@ -2,12 +2,8 @@ import logging
 from typing import List, Dict, Any
 from app.database.connection import DatabaseConnectionPool
 from app.utils.redis_client import RedisManager
-from app.crawler.fetcher import (
-    fetch_releases,
-    fetch_tags,
-    fetch_commits,
-    fetch_compare_commits
-)
+from app.utils.metrics import PROCESSING_TIME
+from app.crawler.fetcher import fetch_with_retry, token_rotator
 
 # Global Redis manager
 redis_manager = RedisManager()
@@ -91,121 +87,67 @@ def upsert_repo_with_data(
         return False
 
 
-def process_repository(repo: Dict[str, Any]) -> bool:
-    """
-    Process a single repository with optimized logic:
-    - Check cache to avoid re-processing
-    - Fetch releases with fallback to tags
-    - Use Compare API for incremental commits
-    - Cache the result
-    """
-    try:
-        full_name = repo['full_name']
-        owner = repo['owner']['login']
-        repo_name = repo['name']
-        
-        # Check if recently processed
-        if redis_manager.is_repo_processed(full_name):
-            logging.info(f"Skipping recently processed repo: {full_name}")
-            return True
-        
-        print(f"Processing repo: {full_name}")
-        
-        # Fetch releases with fallback to tags
-        releases = fetch_releases(owner, repo_name)
-        
-        if not releases:
-            logging.info(f"No releases found for {full_name}, trying tags...")
-            tags = fetch_tags(owner, repo_name)
-            
-            # Convert tags to release-like format
-            releases = [
-                {
-                    'name': tag.get('name'),
-                    'tag_name': tag.get('name'),
-                    'published_at': None,
-                    'html_url': tag.get('commit', {}).get('url')
-                }
-                for tag in tags[:10]
-            ]
-        
-        # If still no releases/tags, just fetch recent commits
-        if not releases:
-            logging.info(f"No releases or tags for {full_name}, fetching recent commits...")
-            commits = fetch_commits(owner, repo_name, per_page=20)
-        else:
-            # Use Compare API for incremental commits between releases
-            commits = []
-            last_cached_release = redis_manager.get_last_release(full_name)
-            
-            for i, release in enumerate(releases):
-                tag_name = release.get('tag_name')
-                
-                # Skip if we've already processed this release
-                if tag_name == last_cached_release:
-                    break
-                
-                # Get commits for this release
-                if i < len(releases) - 1:
-                    # Compare with previous release
-                    base = releases[i + 1].get('tag_name')
-                    head = tag_name
-                    release_commits = fetch_compare_commits(owner, repo_name, base, head)
-                else:
-                    # For the oldest release, just get recent commits
-                    release_commits = fetch_commits(owner, repo_name, per_page=10)
-                
-                commits.extend(release_commits)
-            
-            # Cache the latest release
-            if releases:
-                redis_manager.cache_last_release(full_name, releases[0].get('tag_name'))
-        
-        # Prepare data for database
+def process_repository(repo):
+    """Xử lý một repo: gọi API chi tiết (releases/tags/commits), parse và lưu DB."""
+    with PROCESSING_TIME.time():  # Đo trọn chu trình xử lý repo gồm cả I/O mạng
+        headers = token_rotator.get_headers()  # Sử dụng token_rotator từ fetcher
+        owner = repo["owner"]["login"]
+        name = repo["name"]
+
+        # Ví dụ: gọi releases
+        releases_url = f"https://api.github.com/repos/{owner}/{name}/releases"
+        releases = fetch_with_retry(releases_url)
+
+        # Ví dụ: gọi tags
+        tags_url = f"https://api.github.com/repos/{owner}/{name}/tags"
+        tags = fetch_with_retry(tags_url)
+
+        # Ví dụ: gọi commits (giới hạn để tránh quá nhiều requests)
+        commits_url = f"https://api.github.com/repos/{owner}/{name}/commits?per_page=10"
+        commits = fetch_with_retry(commits_url)
+
+        # Parse và lưu vào DB
         repo_data = {
             'github_id': repo['id'],
             'name': repo['name'],
-            'full_name': full_name,
+            'full_name': f"{owner}/{name}",
             'html_url': repo['html_url'],
             'stargazers_count': repo.get('stargazers_count'),
             'language': repo.get('language'),
             'created_at': repo.get('created_at')
         }
-        
-        releases_data = [
-            {
-                'name': rel.get('name'),
-                'tag_name': rel.get('tag_name'),
-                'published_at': rel.get('published_at'),
-                'html_url': rel.get('html_url')
-            }
-            for rel in releases
-        ]
-        
-        commits_data = [
-            {
-                'sha': c.get('sha'),
-                'message': c.get('commit', {}).get('message') if isinstance(c.get('commit'), dict) else c.get('message'),
-                'author_name': c.get('commit', {}).get('author', {}).get('name') if isinstance(c.get('commit'), dict) else c.get('author_name'),
-                'date': c.get('commit', {}).get('author', {}).get('date') if isinstance(c.get('commit'), dict) else c.get('date'),
-                'html_url': c.get('html_url')
-            }
-            for c in commits
-        ]
-        
+
+        # Convert releases/tags to expected format
+        releases_data = []
+        if releases:
+            for rel in releases[:5]:  # Limit to 5 releases
+                releases_data.append({
+                    'name': rel.get('name'),
+                    'tag_name': rel.get('tag_name'),
+                    'published_at': rel.get('published_at'),
+                    'html_url': rel.get('html_url')
+                })
+
+        # Convert commits to expected format
+        commits_data = []
+        if commits:
+            for commit in commits[:10]:  # Limit to 10 commits
+                commit_info = commit.get('commit', {})
+                commits_data.append({
+                    'sha': commit.get('sha'),
+                    'message': commit_info.get('message'),
+                    'author_name': commit_info.get('author', {}).get('name'),
+                    'date': commit_info.get('author', {}).get('date'),
+                    'html_url': commit.get('html_url')
+                })
+
         # Save to database
         success = upsert_repo_with_data(repo_data, releases_data, commits_data)
         
         if success:
-            # Mark as processed in cache
-            redis_manager.cache_repo_processed(full_name)
-            print(f"✓ Successfully processed {full_name}")
+            redis_manager.cache_repo_processed(f"{owner}/{name}")
+            print(f"✓ Successfully processed {owner}/{name}")
             return True
         else:
-            print(f"✗ Failed to process {full_name}")
+            print(f"✗ Failed to process {owner}/{name}")
             return False
-            
-    except Exception as e:
-        logging.error(f"Error processing repo {repo.get('full_name', 'unknown')}: {e}")
-        print(f"✗ Error processing {repo.get('full_name', 'unknown')}: {e}")
-        return False

@@ -83,7 +83,8 @@ def create_tables_sync():
                     release_name VARCHAR(255),
                     tag_name VARCHAR(100),
                     published_at TIMESTAMP,
-                    html_url VARCHAR(500)
+                    html_url VARCHAR(500),
+                    UNIQUE(repo_id, tag_name)
                 );
             """)
             
@@ -91,7 +92,7 @@ def create_tables_sync():
                 CREATE TABLE IF NOT EXISTS commits (
                     id SERIAL PRIMARY KEY,
                     repo_id INT REFERENCES repositories(id),
-                    sha VARCHAR(40),
+                    sha VARCHAR(40) UNIQUE,
                     message TEXT,
                     author_name VARCHAR(255),
                     date TIMESTAMP,

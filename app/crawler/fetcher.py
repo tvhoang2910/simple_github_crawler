@@ -4,6 +4,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from app.config import GITHUB_TOKENS
 from app.utils.token_rotator import GitHubTokenRotator
+from app.utils.metrics import REQUEST_COUNT, RETRY_COUNT
 
 # Global token rotator
 token_rotator = GitHubTokenRotator(GITHUB_TOKENS)
@@ -13,12 +14,19 @@ def fetch_with_retry(url: str, max_retries: int = 3) -> Optional[Dict[str, Any]]
     for attempt in range(max_retries):
         try:
             headers = token_rotator.get_headers()
+            
+            # Increment Request Count
+            REQUEST_COUNT.inc()
+            
             response = requests.get(url, headers=headers, timeout=10)
             
             if response.status_code == 200:
                 return response.json()
             
             elif response.status_code == 403:
+                # Increment Retry Count
+                RETRY_COUNT.inc()
+                
                 # Check for rate limit reset header
                 reset_time = response.headers.get("x-ratelimit-reset")
                 if reset_time:

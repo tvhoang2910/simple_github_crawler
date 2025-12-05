@@ -1,0 +1,33 @@
+crawler_performance.prof
+app/__pycache__/
+app/crawler/__pycache__
+app/utils/__pycache__
+app/database/__pycache__/
+
+# Environment variables (NEVER commit)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+crawler.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
