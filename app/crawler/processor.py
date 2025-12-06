@@ -8,6 +8,7 @@ from app.crawler.fetcher import (
     fetch_commits,
     fetch_compare_commits,
 )
+from app.metrics import PROCESSING_TIME, CACHE_HIT_COUNT
 
 # Global Redis manager
 redis_manager = RedisManager()
@@ -98,6 +99,16 @@ def upsert_repo_with_data(
                             ),
                         )
 
+                logging.info(
+                    f"Batch insert completed for {repo_data['full_name']}",
+                    extra={
+                        "event": "Batch Insert",
+                        "repo": repo_data["full_name"],
+                        "releases_count": len(releases_data),
+                        "commits_count": len(commits_data),
+                    },
+                )
+
                 conn.commit()
                 return True
 
@@ -108,6 +119,7 @@ def upsert_repo_with_data(
         return False
 
 
+@PROCESSING_TIME.time()
 def process_repository(repo: Dict[str, Any]) -> bool:
     """
     Process a single repository with optimized logic:
@@ -123,7 +135,11 @@ def process_repository(repo: Dict[str, Any]) -> bool:
 
         # Check if recently processed
         if redis_manager.is_repo_processed(full_name):
-            logging.info(f"Skipping recently processed repo: {full_name}")
+            logging.info(
+                f"Skipping recently processed repo: {full_name}",
+                extra={"event": "Duplicate Skipped", "repo_name": full_name},
+            )
+            CACHE_HIT_COUNT.inc()
             return True
 
         print(f"Processing repo: {full_name}")

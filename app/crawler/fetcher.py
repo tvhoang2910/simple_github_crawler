@@ -4,6 +4,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from app.config import GITHUB_TOKENS
 from app.utils.token_rotator import GitHubTokenRotator
+from app.metrics import REQUEST_COUNT, RETRY_COUNT
 
 # Global token rotator
 token_rotator = GitHubTokenRotator(GITHUB_TOKENS)
@@ -14,9 +15,17 @@ def fetch_with_retry(url: str, max_retries: int = 3) -> Optional[Dict[str, Any]]
     for attempt in range(max_retries):
         try:
             headers = token_rotator.get_headers()
+            if headers is None:
+                # All tokens exhausted
+                logging.error("All GitHub tokens exhausted, cannot make request")
+                return None
+
+            REQUEST_COUNT.inc()
             response = requests.get(url, headers=headers, timeout=10)
 
             if response.status_code == 200:
+                # Add small delay between successful requests to avoid rate limits
+                time.sleep(0.1)  # 100ms delay
                 return response.json()
 
             elif response.status_code == 403:
@@ -26,16 +35,29 @@ def fetch_with_retry(url: str, max_retries: int = 3) -> Optional[Dict[str, Any]]
                     wait_time = int(reset_time) - time.time()
                     if wait_time > 0:
                         logging.warning(
-                            f"Rate limit hit. Waiting {wait_time:.2f}s until reset."
+                            f"Rate limit hit. Waiting {wait_time:.2f}s until reset.",
+                            extra={
+                                "event": "Rate Limit Hit",
+                                "wait_time": wait_time,
+                                "reset_timestamp": reset_time,
+                                "url": url,
+                            },
                         )
                         print(f"Rate limit hit. Waiting {wait_time:.2f}s...")
                         time.sleep(wait_time + 1)  # Wait a bit extra
                         # Retry immediately after wait
+                        RETRY_COUNT.inc()
                         continue
 
                 logging.warning(
-                    f"Rate limit hit (no reset header) on attempt {attempt + 1}"
+                    f"Rate limit hit (no reset header) on attempt {attempt + 1}",
+                    extra={
+                        "event": "Rate Limit Hit",
+                        "attempt": attempt + 1,
+                        "url": url,
+                    },
                 )
+                RETRY_COUNT.inc()
                 time.sleep(2**attempt)  # Exponential backoff
 
             elif response.status_code == 422:
@@ -52,8 +74,17 @@ def fetch_with_retry(url: str, max_retries: int = 3) -> Optional[Dict[str, Any]]
                 )
 
         except Exception as e:
-            logging.error(f"Request failed on attempt {attempt + 1}: {e}")
+            logging.error(
+                f"Request failed on attempt {attempt + 1}: {e}",
+                extra={
+                    "event": "Retry",
+                    "reason": str(e),
+                    "retry_count": attempt + 1,
+                    "url": url,
+                },
+            )
             if attempt < max_retries - 1:
+                RETRY_COUNT.inc()
                 time.sleep(1)
 
     return None

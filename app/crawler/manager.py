@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.database.connection import DatabaseConnectionPool, create_tables_sync
 from app.crawler.fetcher import fetch_top_repositories
 from app.crawler.processor import process_repository, redis_manager
+from app.metrics import QUEUE_SIZE
 
 
 def queue_worker():
@@ -17,6 +18,9 @@ def queue_worker():
     DatabaseConnectionPool.initialize(minconn=1, maxconn=2)
 
     while True:
+        # Update queue size metric
+        QUEUE_SIZE.set(redis_manager.get_queue_size())
+
         repo_data = redis_manager.pop_from_queue(timeout=5)
 
         if repo_data is None:
