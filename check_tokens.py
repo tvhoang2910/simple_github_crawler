@@ -42,13 +42,15 @@ def check_token_rate_limit(token: str) -> dict:
 def main():
     # Load tokens from environment variable or .env file
     from app.config import GITHUB_TOKENS
-    
+
     # Use tokens from config
     tokens = GITHUB_TOKENS
-    
+
     if not tokens:
         print("Error: No GitHub tokens found in environment variables (GITHUB_TOKENS)")
-        print("Please add tokens to your .env file or export them as environment variable")
+        print(
+            "Please add tokens to your .env file or export them as environment variable"
+        )
         return
 
     print("Checking GitHub token rate limits...\n")
