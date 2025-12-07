@@ -1,10 +1,11 @@
+__pycache__/
 __pycache__/database.cpython-312.pyc
 __pycache__/config.cpython-312.pyc
+__pycache__/database.cpython-313.pyc
+__pycache__/config.cpython-313.pyc
 pg-docker-demo/db/init/01-init.sql
 pg-docker-demo/docker-compose.yml
 pg-docker-demo/.env
-__pycache__/database.cpython-313.pyc
-__pycache__/config.cpython-313.pyc
 #! Do not ignore config.py in the root
 
 # Local environment files (should NOT be tracked)
