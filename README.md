@@ -156,18 +156,7 @@ Hệ thống được xây dựng theo mô hình **Producer-Consumer** với hai
 ### 2. Quy trình xử lý chi tiết
 
 #### Bước 1: Thu thập danh sách Repository
-```
-fetch_top_repositories()
-│
-├─► Query GitHub Search API với nhiều khoảng sao
-│   ├─► stars:>=50000
-│   ├─► stars:10000..49999
-│   ├─► stars:5000..9999
-│   ├─► stars:2000..4999
-│   └─► stars:1000..1999
-│
-└─► Trả về danh sách tối đa 5000 repos
-```
+
 
 #### Bước 2: Xử lý từng Repository
 ```
