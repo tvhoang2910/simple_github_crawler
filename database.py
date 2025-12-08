@@ -27,9 +27,9 @@ from tortoise.exceptions import (
 )
 from tortoise.transactions import in_transaction
 
-from config import DB_HOST, DB_NAME, DB_USER, DB_PASS, DB_PORT, BATCH_SIZE
-from models import Repository, Release, Commit
-from interfaces import GitHubReleaseCommit
+from app.config import DB_HOST, DB_NAME, DB_USER, DB_PASS, DB_PORT, BATCH_SIZE
+from app.database.models import Repository, Release, Commit
+from app.schemas.github import GitHubReleaseCommit
 
 T = TypeVar("T")
 

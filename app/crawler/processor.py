@@ -60,12 +60,13 @@ def prepare_releases_with_commits(
             
             releases_with_commits.append(release_obj)
     else:
-        # No releases - create a default one for main branch
+        # No releases - create a pseudo-release for all commits 
         if commits_data:
+            logging.info(f"Creating pseudo-release 'all' for repository with {len(commits_data)} commits")
             default_release = {
                 "release": {
-                    "tag_name": "main",
-                    "body": "Main branch commits",
+                    "tag_name": "all",
+                    "body": "All commits in repository",
                 },
                 "commits": []
             }
@@ -143,13 +144,13 @@ async def async_process_repository(repo: Dict[str, Any]) -> bool:
 
         # Fetch commits
         if not releases:
-            logging.info(f"No releases or tags for {full_name}, fetching recent commits...")
+            logging.info(f"No releases or tags for {full_name}, fetching all commits...")
             commits = await loop.run_in_executor(
                 None,
                 fetch_commits,
                 owner,
                 repo_name,
-                20
+                100  # Get more commits for repos without releases
             )
         else:
             # Use Compare API for incremental commits
