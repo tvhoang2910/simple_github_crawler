@@ -1,6 +1,6 @@
 import logging
+import asyncio
 from typing import List, Dict, Any
-from app.database.connection import DatabaseConnectionPool
 from app.utils.redis_client import RedisManager
 from app.crawler.fetcher import (
     fetch_releases,
@@ -8,113 +8,96 @@ from app.crawler.fetcher import (
     fetch_commits,
     fetch_compare_commits,
 )
+from database import async_upsert_repo_with_releases_and_commits
 
 # Global Redis manager
 redis_manager = RedisManager()
 
 
-def upsert_repo_with_data(
-    repo_data: Dict[str, Any],
+# ============================================================================
+# ASYNC PROCESSING FUNCTIONS (OPTIMIZED)
+# ============================================================================
+
+
+def prepare_releases_with_commits(
     releases_data: List[Dict[str, Any]],
-    commits_data: List[Dict[str, Any]],
-) -> bool:
+    commits_data: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
     """
-    Upsert repository with releases and commits using connection pool.
-    Returns True if successful.
+    Transform releases and commits data to match the format expected by 
+    async_upsert_repo_with_releases_and_commits.
+    
+    Returns list of GitHubReleaseCommit structures.
     """
-    try:
-        with DatabaseConnectionPool.get_connection() as conn:
-            with conn.cursor() as cur:
-                # Upsert repository
-                cur.execute(
-                    """
-                    INSERT INTO repositories (github_id, name, full_name, html_url, stargazers_count, language, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (github_id) DO UPDATE SET
-                        stargazers_count = EXCLUDED.stargazers_count
-                    RETURNING id;
-                """,
-                    (
-                        repo_data["github_id"],
-                        repo_data["name"],
-                        repo_data["full_name"],
-                        repo_data["html_url"],
-                        repo_data.get("stargazers_count"),
-                        repo_data.get("language"),
-                        repo_data.get("created_at"),
-                    ),
-                )
-
-                result = cur.fetchone()
-                repo_id = result[0] if result else None
-
-                if not repo_id:
-                    cur.execute(
-                        "SELECT id FROM repositories WHERE github_id = %s",
-                        (repo_data["github_id"],),
-                    )
-                    result = cur.fetchone()
-                    repo_id = result[0] if result else None
-
-                if not repo_id:
-                    raise Exception(
-                        f"Failed to get repo_id for {repo_data['full_name']}"
-                    )
-
-                # Batch insert releases
-                if releases_data:
-                    for release in releases_data:
-                        cur.execute(
-                            """
-                            INSERT INTO releases (repo_id, release_name, tag_name, published_at, html_url)
-                            VALUES (%s, %s, %s, %s, %s)
-                            ON CONFLICT (repo_id, tag_name) DO NOTHING
-                        """,
-                            (
-                                repo_id,
-                                release.get("name"),
-                                release.get("tag_name"),
-                                release.get("published_at"),
-                                release.get("html_url"),
-                            ),
-                        )
-
-                # Batch insert commits
-                if commits_data:
-                    for commit in commits_data:
-                        cur.execute(
-                            """
-                            INSERT INTO commits (repo_id, sha, message, author_name, date, html_url)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (sha) DO NOTHING
-                        """,
-                            (
-                                repo_id,
-                                commit.get("sha"),
-                                commit.get("message"),
-                                commit.get("author_name"),
-                                commit.get("date"),
-                                commit.get("html_url"),
-                            ),
-                        )
-
-                conn.commit()
-                return True
-
-    except Exception as e:
-        logging.error(
-            f"Error upserting repo {repo_data.get('full_name', 'unknown')}: {e}"
-        )
-        return False
+    releases_with_commits = []
+    
+    if releases_data:
+        # For each release, associate all commits
+        for release in releases_data:
+            release_obj = {
+                "release": {
+                    "tag_name": release.get("tag_name", "unknown"),
+                    "body": release.get("name") or release.get("tag_name", ""),
+                    "published_at": release.get("published_at"),
+                },
+                "commits": []
+            }
+            
+            # Transform commits to match expected structure
+            for commit in commits_data:
+                commit_obj = {
+                    "sha": commit.get("sha"),
+                    "commit": {
+                        "message": commit.get("message", ""),
+                        "author": {
+                            "name": commit.get("author_name", "Unknown"),
+                            "date": commit.get("date"),
+                        }
+                    },
+                    "html_url": commit.get("html_url", ""),
+                }
+                release_obj["commits"].append(commit_obj)
+            
+            releases_with_commits.append(release_obj)
+    else:
+        # No releases - create a default one for main branch
+        if commits_data:
+            default_release = {
+                "release": {
+                    "tag_name": "main",
+                    "body": "Main branch commits",
+                },
+                "commits": []
+            }
+            
+            for commit in commits_data:
+                commit_obj = {
+                    "sha": commit.get("sha"),
+                    "commit": {
+                        "message": commit.get("message", ""),
+                        "author": {
+                            "name": commit.get("author_name", "Unknown"),
+                            "date": commit.get("date"),
+                        }
+                    },
+                    "html_url": commit.get("html_url", ""),
+                }
+                default_release["commits"].append(commit_obj)
+            
+            releases_with_commits.append(default_release)
+    
+    return releases_with_commits
 
 
-def process_repository(repo: Dict[str, Any]) -> bool:
+async def async_process_repository(repo: Dict[str, Any]) -> bool:
     """
-    Process a single repository with optimized logic:
+    Async process a single repository with optimized logic:
     - Check cache to avoid re-processing
     - Fetch releases with fallback to tags
     - Use Compare API for incremental commits
-    - Cache the result
+    - Use async database operations with Tortoise ORM
+    
+    Returns True if successful, False otherwise.
     """
     try:
         full_name = repo["full_name"]
@@ -126,15 +109,27 @@ def process_repository(repo: Dict[str, Any]) -> bool:
             logging.info(f"Skipping recently processed repo: {full_name}")
             return True
 
-        print(f"Processing repo: {full_name}")
+        print(f"[ASYNC] Processing repo: {full_name}")
 
-        # Fetch releases with fallback to tags
-        releases = fetch_releases(owner, repo_name)
+        # Run sync API calls in executor
+        loop = asyncio.get_event_loop()
+        
+        releases = await loop.run_in_executor(
+            None, 
+            fetch_releases, 
+            owner, 
+            repo_name
+        )
 
         if not releases:
             logging.info(f"No releases found for {full_name}, trying tags...")
-            tags = fetch_tags(owner, repo_name)
-
+            tags = await loop.run_in_executor(
+                None,
+                fetch_tags,
+                owner,
+                repo_name
+            )
+            
             # Convert tags to release-like format
             releases = [
                 {
@@ -146,53 +141,53 @@ def process_repository(repo: Dict[str, Any]) -> bool:
                 for tag in tags[:10]
             ]
 
-        # If still no releases/tags, just fetch recent commits
+        # Fetch commits
         if not releases:
-            logging.info(
-                f"No releases or tags for {full_name}, fetching recent commits..."
+            logging.info(f"No releases or tags for {full_name}, fetching recent commits...")
+            commits = await loop.run_in_executor(
+                None,
+                fetch_commits,
+                owner,
+                repo_name,
+                20
             )
-            commits = fetch_commits(owner, repo_name, per_page=20)
         else:
-            # Use Compare API for incremental commits between releases
+            # Use Compare API for incremental commits
             commits = []
             last_cached_release = redis_manager.get_last_release(full_name)
 
             for i, release in enumerate(releases):
                 tag_name = release.get("tag_name")
 
-                # Skip if we've already processed this release
                 if tag_name == last_cached_release:
                     break
 
-                # Get commits for this release
                 if i < len(releases) - 1:
-                    # Compare with previous release
                     base = releases[i + 1].get("tag_name")
                     head = tag_name
-                    release_commits = fetch_compare_commits(
-                        owner, repo_name, base, head
+                    release_commits = await loop.run_in_executor(
+                        None,
+                        fetch_compare_commits,
+                        owner,
+                        repo_name,
+                        base,
+                        head
                     )
                 else:
-                    # For the oldest release, just get recent commits
-                    release_commits = fetch_commits(owner, repo_name, per_page=10)
+                    release_commits = await loop.run_in_executor(
+                        None,
+                        fetch_commits,
+                        owner,
+                        repo_name,
+                        10
+                    )
 
                 commits.extend(release_commits)
 
-            # Cache the latest release
             if releases:
                 redis_manager.cache_last_release(full_name, releases[0].get("tag_name"))
 
-        # Prepare data for database
-        repo_data = {
-            "github_id": repo["id"],
-            "name": repo["name"],
-            "full_name": full_name,
-            "html_url": repo["html_url"],
-            "stargazers_count": repo.get("stargazers_count"),
-            "language": repo.get("language"),
-            "created_at": repo.get("created_at"),
-        }
-
+        # Prepare data
         releases_data = [
             {
                 "name": rel.get("name"),
@@ -220,19 +215,60 @@ def process_repository(repo: Dict[str, Any]) -> bool:
             for c in commits
         ]
 
-        # Save to database
-        success = upsert_repo_with_data(repo_data, releases_data, commits_data)
+        # Transform and upsert using async Tortoise ORM
+        releases_with_commits = prepare_releases_with_commits(releases_data, commits_data)
 
-        if success:
-            # Mark as processed in cache
+        result = await async_upsert_repo_with_releases_and_commits(
+            owner=owner,
+            repo_name=repo_name,
+            releases_with_commits=releases_with_commits
+        )
+
+        if result.get("success"):
             redis_manager.cache_repo_processed(full_name)
-            print(f"[SUCCESS] Successfully processed {full_name}")
+            print(f"[ASYNC SUCCESS] Successfully processed {full_name}")
             return True
         else:
-            print(f"[FAILED] Failed to process {full_name}")
+            print(f"[ASYNC FAILED] Failed to process {full_name}")
             return False
 
     except Exception as e:
-        logging.error(f"Error processing repo {repo.get('full_name', 'unknown')}: {e}")
-        print(f"[ERROR] Error processing {repo.get('full_name', 'unknown')}: {e}")
+        logging.error(f"[ASYNC] Error processing repository {repo.get('full_name', 'unknown')}: {e}")
+        print(f"[ASYNC ERROR] Error processing {repo.get('full_name', 'unknown')}: {e}")
         return False
+
+
+async def async_queue_worker(worker_id: int, semaphore: asyncio.Semaphore) -> int:
+    """
+    Async worker that processes repositories from Redis queue.
+    Uses semaphore to limit concurrent database operations.
+    
+    Args:
+        worker_id: Unique identifier for this worker
+        semaphore: Asyncio semaphore to limit concurrency
+        
+    Returns:
+        Number of repositories processed
+    """
+    print(f"[Worker-{worker_id}] Started")
+    processed = 0
+
+    while True:
+        repo_data = redis_manager.pop_from_queue(timeout=2)
+
+        if repo_data is None:
+            queue_size = redis_manager.get_queue_size()
+            if queue_size == 0:
+                await asyncio.sleep(0.5)
+                if redis_manager.get_queue_size() == 0:
+                    break
+            continue
+
+        # Process with semaphore to limit concurrent DB operations
+        async with semaphore:
+            success = await async_process_repository(repo_data)
+            if success:
+                processed += 1
+
+    print(f"[Worker-{worker_id}] Finished. Processed {processed} repositories.")
+    return processed
