@@ -346,77 +346,57 @@ simple_github_crawler/
 
 ---
 
-## V. 📊 KẾT QUẢ & BENCHMARK
+# V. 📊 KẾT QUẢ & BENCHMARK
 
-### 1. So sánh hiệu năng
+Dưới đây là kết quả đo lường hiệu năng và phân tích hệ thống sau khi cải tiến, thực hiện trên môi trường thực tế với kết nối mạng tiêu chuẩn.
 
-| Chỉ số | Tuần tự (1 luồng) | Multi-threading (10 luồng) | Cải thiện |
-|--------|-------------------|---------------------------|-----------|
-| **Thời gian xử lý 100 repos** | ~600s (10 phút) | ~120s (2 phút) | **5x nhanh hơn** |
-| **Thời gian xử lý 5000 repos** | ~15-16 giờ | ~3-4 giờ | **4-5x nhanh hơn** |
-| **API Requests/giây** | ~5 req/s | ~25 req/s | **5x tăng** |
-| **CPU Utilization** | 10-20% | 60-80% | **Tối ưu tài nguyên** |
-| **Database I/O** | Cao (nhiều queries nhỏ) | Thấp (batch insert) | **Giảm 70% I/O** |
+## 1. So sánh khả năng mở rộng (Scaling: 5 vs 10 Threads)
+Test case thực hiện trên **500 Repositories** để đánh giá hiệu quả khi tăng gấp đôi số luồng.
 
-### 2. Kết quả thực tế
+| Chỉ số (Metrics) | 5 Threads | 10 Threads | Cải thiện (Improvement) |
+| :--- | :--- | :--- | :--- |
+| **Tổng thời gian (Total Time)** | `1394.00s` (~23 phút) | `1100.96s` (~18 phút) | Tốc độ tăng **~21%** |
+| **Thông lượng (Throughput)** | `2.98 req/s` | `3.77 req/s` | Hiệu suất tăng **~26.5%** |
+| **Trung bình mỗi Repo** | `2.79s` / repo | `2.20s` / repo | Giảm thời gian chờ |
+| **Tổng Request gửi đi** | 4,154 | 4,151 | Ổn định (Logic chính xác) |
+| **Request trung bình/Repo** | ~8.3 reqs | ~8.3 reqs | Dữ liệu đồng nhất |
 
-**Cấu hình test:**
-- Repository limit: 100
-- Workers: 10 threads
-- Tokens: 3 GitHub tokens
-- Database: PostgreSQL trên localhost
-
-**Kết quả:**
-```
-BENCHMARK SUMMARY
-==================================================
-Threads (max_workers)   : 10
-Limit (repositories)    : 100
-Total Execution Time    : 118.45 seconds
-Total Requests          : 1,247
-Total Items Processed   : 100
-Average Requests / Sec  : 10.53
-==================================================
-```
-
-**Phân tích log:**
-```
-LOG ANALYSIS REPORT
-==================================================
-Event Type                     | Count     
--------------------------------------------
-Batch Insert                   | 98        
-Switch Token                   | 15        
-Retry                          | 8         
-Duplicate Skipped              | 2         
-Rate Limit Hit                 | 3         
-==================================================
-```
-
-### 3. Các chỉ số quan trọng
-
-- **Success Rate**: 98% (98/100 repos processed successfully)
-- **Token Switch**: 15 lần (tự động rotation khi cần)
-- **Retry Count**: 8 lần (xử lý lỗi mạng)
-- **Cache Hit**: 2 repos đã được xử lý trước đó
-- **Average Time/Repo**: ~1.2 giây
-
-### 4. Monitoring với Prometheus
-
-Truy cập `http://localhost:8000` để xem metrics:
-
-```prometheus
-# HELP github_crawler_requests_total Total HTTP requests sent to GitHub API
-# TYPE github_crawler_requests_total counter
-github_crawler_requests_total 1247.0
-
-# HELP github_crawler_processing_seconds Time taken to process a single repository
-# TYPE github_crawler_processing_seconds histogram
-github_crawler_processing_seconds_count 100.0
-github_crawler_processing_seconds_sum 120.5
-```
+> **💡 Nhận xét:**
+> *   **Tính nhất quán:** Số lượng request gần như bằng nhau tuyệt đối giữa hai lần chạy chứng tỏ logic crawler hoạt động chính xác (Clean State), không bị trùng lặp hay sót dữ liệu.
+> *   **Tại sao tốc độ không tăng gấp đôi?** Dù số luồng tăng 100% (5 lên 10), hiệu năng chỉ tăng ~26.5%. Nguyên nhân là do **Network Latency** (độ trễ mạng). Các luồng tốn phần lớn thời gian chờ phản hồi từ GitHub (IO Bound) thay vì xử lý tính toán.
 
 ---
+
+## 2. Kết quả kiểm thử ổn định (Stress Test)
+Chạy thực tế với **750 Repositories** và **10 Threads** để kiểm tra độ tin cậy.
+
+| Thông số | Kết quả | Đánh giá |
+| :--- | :--- | :--- |
+| **Repositories** | 750 / 750 | **100% Thành công** (Failed: 0) |
+| **Thời gian chạy** | 1502.41s (~25 phút) | Trung bình 2.00s / 1 repo |
+| **Tốc độ xử lý** | 3.33 Req/s | An toàn dưới ngưỡng Rate Limit |
+| **Retry Count** | 1 | Cơ chế phục hồi lỗi mạng hoạt động tốt |
+| **Database I/O** | Rất thấp | Không bị nghẽn cổ chai (Bottleneck) |
+
+> **💡 Nhận xét:**
+> *   **Độ tin cậy tuyệt đối:** Hệ thống không bỏ sót bất kỳ repository nào. Cơ chế `Retry` đã bắt được lỗi mạng tạm thời và xử lý thành công.
+> *   **An toàn:** Tốc độ `3.33 RPS` (~12,000 req/giờ) là con số lý tưởng để crawl lượng dữ liệu lớn mà không vi phạm chính sách bảo mật của GitHub (nếu sử dụng Pool Token hợp lý).
+
+---
+
+## 3. Phân tích điểm nghẽn (Bottleneck Analysis)
+Dựa trên dữ liệu Profiling từ **SnakeViz** và **Yappi**:
+
+| Thành phần | Thời gian tiêu tốn (Wall Time) | Vai trò hệ thống | Kết luận |
+| :--- | :--- | :--- | :--- |
+| **Network I/O** <br> (`socket.readinto`, `ssl.read`) | **~99%** | Chờ phản hồi từ Server GitHub | **Bottleneck chính.** Tốc độ phụ thuộc vào đường truyền và phản hồi API. |
+| **CPU Processing** <br> (`decoder.py`, `json.parse`) | < 1% (~14.49s total) | Chuyển đổi JSON sang Object | Code Python xử lý rất nhẹ, không gây chậm. |
+| **Database Write** <br> (`upsert_repo`) | ~0.4% (~59s total) | Ghi dữ liệu vào PostgreSQL | DB xử lý cực nhanh, Connection Pool hiệu quả. |
+| **Token Rotation** | < 0.1% | Xoay vòng Token | Logic `Round-Robin` hoạt động tức thì, không tốn tài nguyên. |
+
+> **💡 Nhận xét tổng quan:**
+> *   **Bản chất Crawler:** Đây là ứng dụng **Network Bound**. Việc tối ưu code thêm nữa sẽ không mang lại nhiều ý nghĩa bằng việc cải thiện đường truyền mạng hoặc sử dụng Proxy/Nhiều Token hơn.
+> *   **Logic Token:** Biểu đồ cho thấy tỷ lệ `1 Request : 1 Token Switch`, chứng tỏ tải được phân chia đều tăm tắp ("Fair Load Balancing"), giúp tận dụng tối đa quota của từng token.
 
 ## VI. 🎯 TỔNG KẾT
 
